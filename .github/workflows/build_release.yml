@@ -1,0 +1,71 @@
+name: Auto Build & Release
+
+on:
+  push:
+    branches: [main]  # 修改为你的主分支名称
+permissions:
+  contents: write
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    services:
+      docker:
+        image: docker:20.10.7-dind  # 使用Docker-in-Docker服务
+        options: --privileged       # 启用特权模式
+        env:
+          DOCKER_TLS_VERIFY: 1
+          DOCKER_CERT_PATH: /certs/client
+        ports:
+          - 2375:2375/tcp
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Add execute permission
+        run: chmod +x ./build.sh
+
+      - name: Execute build script
+        run: ./build.sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 需要仓库访问权限
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Check if release already exists
+        id: check_release
+        run: |
+          tag_name="v1.0.0"
+          response=$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag_name")
+          if [ "$response" == "200" ]; then
+            echo "Release already exists for tag $tag_name. Deleting the existing release..."
+            release_id=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag_name" | jq -r '.id')
+            curl -s -X DELETE -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" "https://api.github.com/repos/${{ github.repository }}/releases/$release_id"
+            echo "release_deleted=true" >> $GITHUB_OUTPUT
+          else
+            echo "release_deleted=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 创建发布
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v1.0.0
+          release_name: Release v1.0.0
+          draft: false
+          prerelease: false
+
+      # 上传二进制包
+      - name: Upload Release Asset
+        id: upload-release-asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./target/py-offline-dependencies.zip
+          asset_name: py-offline-dependencies.zip
+          asset_content_type: application/octet-stream
